@@ -1,0 +1,130 @@
+---
+title: "try_Seurat"
+author: "xzk"
+date: '2022-05-13'
+output: html_document
+---
+
+# integrate mouse and human T cells with Seurat_v3
+
+## load packages
+```{r}
+suppressPackageStartupMessages({
+  library(SingleCellExperiment)
+  library(scMerge)
+  library(zellkonverter)
+  library(Seurat)
+  library(scater)
+})
+```
+
+## load mouse and human T cells data
+
+```{r}
+setwd('D:/xuzk')
+LCA_T <- readH5AD('data/raw_combined_LCA_T_n.h5ad')
+assays(LCA_T)$counts=assays(LCA_T)$X
+assays(LCA_T) <- assays(LCA_T)[-1]
+LCA_T <- logNormCounts(LCA_T)
+LCA_T <- as.Seurat(LCA_T)
+```
+
+## split the dataset into a list of two seurat objects (mouse and human)
+```{r}
+LCA_T.list <- SplitObject(LCA_T, split.by = "species")
+rm(LCA_T)
+```
+
+## normalization, HVG and integration
+
+```{r}
+# normalize and identify variable features for each dataset independently
+LCA_T.list <- lapply(X = LCA_T.list, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+# select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = LCA_T.list)
+
+
+# perform integration
+LCA_T.anchors <- FindIntegrationAnchors(object.list = LCA_T.list, 
+                                         anchor.features = features)
+# this command creates an 'integrated' data assay
+LCA_T.combined <- IntegrateData(anchorset = LCA_T.anchors)
+```
+
+# downstream analysis on the corrected data 
+```{r pressure, echo=FALSE}
+DefaultAssay(LCA_T.combined) <- "integrated"
+# Run the standard workflow for visualization and clustering
+LCA_T.combined <- ScaleData(LCA_T.combined,vars.to.regress = c("total_counts", "pct_counts_mt"), verbose = FALSE)
+LCA_T.combined <- RunPCA(LCA_T.combined, npcs = 30, verbose = FALSE)
+
+ElbowPlot(LCA_T.combined )
+
+LCA_T.combined <- RunUMAP(LCA_T.combined, reduction = "pca", dims = 1:8)
+LCA_T.combined <- FindNeighbors(LCA_T.combined, reduction = "pca", dims = 1:30)
+LCA_T.combined <- FindClusters(LCA_T.combined, resolution = 0.5)
+```
+
+# Visualization
+```{r, echo=TRUE}
+DimPlot(LCA_T.combined, reduction = "umap", group.by = "species")
+
+DimPlot(LCA_T.combined, reduction = "umap", group.by = "label_subtype", cols='polychrome')
+
+# label_subtype-species
+DimPlot(LCA_T.combined, reduction = "umap", group.by = "label_subtype", split.by = 'species',cols='polychrome')
+DimPlot(LCA_T.combined, reduction = "umap", group.by = "label_subtype_hres", split.by = 'species',cols='polychrome')
+
+
+# cluster
+DimPlot(LCA_T.combined, reduction = "umap", label = TRUE, repel = TRUE, cols='alphabet')
+DimPlot(LCA_T.combined, reduction = "umap", group.by = "seurat_clusters", split.by = 'species', cols='alphabet')
+
+
+
+```
+
+# DEG
+# DEGs between CD8+ effector T cells
+```{r}
+#colnames(LCA_T.combined[[]])
+#Idents(LCA_T.combined) <- 'label_subtype_hres'
+LCA_T.CD8eff <- subset(LCA_T.combined,idents=c("h-CD8+ cytotoxic 1","h-CD8+ cytotoxic 2 (IL7R, gamma-delta)","h-CD8+ cytotoxic & exhausted","h-CD8+ cytotoxic & exhausted (gamma-delta)","m-CD8+ cytotoxic T"))
+Teff_markers <- FindMarkers(LCA_T.CD8eff, ident.1 = "m-CD8+ cytotoxic T", group.by='label_subtype_hres',logfc.threshold = 0 )
+```
+# DEGs between Treg,Tfh cells
+```{r}
+#colnames(LCA_T.combined[[]])
+#Idents(LCA_T.combined) <- 'label_subtype_hres'
+LCA_T.Tregfh <- subset(LCA_T.combined,idents=c('h-CD4+ Treg','h-CD4+ Tfh','m-CD4+ exhausted Tfh&Treg'))
+Tregfh_markers <- FindMarkers(LCA_T.Tregfh, ident.1 = "m-CD4+ exhausted Tfh&Treg", group.by='label_subtype_hres',logfc.threshold = 0 )
+```
+
+# DEGs between CD4+ T cells
+```{r}
+#colnames(LCA_T.combined[[]])
+#Idents(LCA_T.combined) <- 'label_subtype_hres'
+LCA_T.CD4 <- subset(LCA_T.combined,idents=c('h-CD4+ naive T','h-CD4+ undefined T','h-Th17-like','h-Th2-like','m-CD4+ naive T','m-Th9-like'))
+TCD4_markers <- FindMarkers(LCA_T.CD4, ident.1 = "h-CD4+ undefined T", group.by='label_subtype_hres',logfc.threshold = 0 )
+```
+
+# DEG
+# DEG between 2 subtypes
+```{r}
+T_markers <- FindMarkers(LCA_T.combined, ident.1 = "m-CD8+ cytotoxic T", ident.2='h-CD8+ cytotoxic 2 (IL7R, gamma-delta)',group.by='label_subtype_hres',logfc.threshold = 1 )
+setwd("D:/xuzk")
+write.table(T_markers,'results/DEG-m-ct_h-ct2.txt')
+```
+
+
+
+```{r}
+setwd("D:/xuzk")
+#saveRDS(LCA_T.combined, file = "outputs/LCA_T.rds")
+LCA_T.combined <- readRDS("outputs/LCA_T.rds")
+```
+
